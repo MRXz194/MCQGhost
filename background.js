@@ -17,6 +17,9 @@ chrome.runtime.onInstalled.addListener(() => {
   });
 });
 
+// Track requests in-flight per tab to avoid duplicate processing
+const inFlightTabs = new Set();
+
 // Xử lý khi user click vào context menu
 chrome.contextMenus.onClicked.addListener((info, tab) => {
   console.log('Context menu clicked:', info.menuItemId);
@@ -29,8 +32,13 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
       type: "SHOW_LOADING"
     }).catch(err => console.warn('Could not send loading message:', err));
     
-    // Gọi AI để giải quyết
-    solveWithAI(selectedText, tab.id);
+    // Gọi AI để giải quyết (chặn trùng lặp theo tab)
+    if (inFlightTabs.has(tab.id)) {
+      console.warn('Solve already in progress for tab:', tab.id);
+      return;
+    }
+    inFlightTabs.add(tab.id);
+    solveWithAI(selectedText, tab.id).finally(() => inFlightTabs.delete(tab.id));
   }
 });
 
@@ -43,8 +51,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     
     console.log('Selected text (via Shift):', selectedText.substring(0, 100) + '...');
     
-    // Gọi AI để giải quyết
-    solveWithAI(selectedText, tabId);
+    // Gọi AI để giải quyết (chặn trùng lặp theo tab)
+    if (inFlightTabs.has(tabId)) {
+      console.warn('Solve already in progress for tab:', tabId);
+      sendResponse({ status: 'busy' });
+      return true;
+    }
+    inFlightTabs.add(tabId);
+    solveWithAI(selectedText, tabId).finally(() => inFlightTabs.delete(tabId));
     
     // Response để content script biết message đã được nhận
     sendResponse({ status: 'processing' });
@@ -101,7 +115,7 @@ async function solveWithAI(rawSelection, tabId) {
 async function callOllamaSimple(ollamaUrl, modelName, prompt) {
   console.log(`Calling Ollama...`);
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 30000); // 30s
+  const timeout = setTimeout(() => controller.abort(), 200000); // 200s
   try {
     const res = await fetch(`${ollamaUrl}/api/generate`, {
       method: 'POST',
@@ -116,7 +130,7 @@ async function callOllamaSimple(ollamaUrl, modelName, prompt) {
           temperature: 0.1,      // 0 = deterministic, không random
           top_p: 0.95,            // Chỉ chọn top 50% tokens có xác suất cao nhất
           top_k: 10,             // Chỉ xét 10 tokens tốt nhất
-          num_predict: 300,       // Giảm xuống 30 (chỉ cần 1 chữ cái)
+          num_predict: -1,         // -1 = không giới hạn, để AI trả lời đầy đủ
           repeat_penalty: 1.2,   // Tăng lên để tránh lặp
           presence_penalty: 0.5, // Tránh lặp lại từ đã dùng
           frequency_penalty: 0.3 // Khuyến khích đa dạng nhưng không quá
@@ -156,6 +170,22 @@ function normalizeSelection(text) {
         } else if (i % 2 === 1 && parts[i] && parts[i+1]) {
           lines.push(`${parts[i]}) ${parts[i+1].trim()}`);
           i++; // Skip next
+        }
+      }
+    } else {
+      // Fallback: hỗ trợ inline dạng "a 1  b 2 c 3 d 4 e 5 else 6"
+      // Bắt KEY (A-Z hoặc special) rồi VALUE đến KEY kế tiếp hoặc hết chuỗi
+      const inlineMatches = [...text.matchAll(/\b(else|other|none|all|[A-Za-z])\s*[\)\.:]?\s+([^]*?)(?=\s+(?:else|other|none|all|[A-Za-z])\s*[\)\.:]?\s+|$)/gi)];
+      if (inlineMatches.length > 1) {
+        const firstIdx = inlineMatches[0].index ?? 0;
+        const questionPart = text.slice(0, firstIdx).trim();
+        lines = [];
+        if (questionPart) lines.push(questionPart);
+        for (const m of inlineMatches) {
+          const key = (m[1] || '').toUpperCase();
+          const val = (m[2] || '').trim();
+          if (!key || !val) continue;
+          lines.push(`${key}) ${val}`);
         }
       }
     }
@@ -199,6 +229,20 @@ function normalizeSelection(text) {
     
     // Pattern đặc biệt với dấu chấm: "else." hoặc "other."
     m = line.match(/^(else|other|none|all)\.\s*(.+)$/i);
+    if (m) {
+      const key = m[1].toUpperCase();
+      optionMap[key] = m[2].trim();
+      continue;
+    }
+    
+    // NEW: hỗ trợ dạng không có kí hiệu ") . :" — ví dụ: "A text" hoặc "else 6"
+    m = line.match(/^([a-zA-Z])\s+(.+)$/);
+    if (m) {
+      const key = m[1].toUpperCase();
+      optionMap[key] = m[2].trim();
+      continue;
+    }
+    m = line.match(/^(else|other|none|all)\s+(.+)$/i);
     if (m) {
       const key = m[1].toUpperCase();
       optionMap[key] = m[2].trim();
@@ -267,11 +311,6 @@ async function safeShowAlert(tabId, message) {
 function extractAnswer(text) {
   console.log('Raw AI response:', text);
   
-  // Cảnh báo nếu response quá dài (dấu hiệu hallucination)
-  if (text.length > 100) {
-    console.warn('Response quá dài (có thể hallucination):', text.length, 'chars');
-  }
-  
   // Làm sạch text
   const cleaned = text.trim();
   const cleanedUpper = cleaned.toUpperCase();
@@ -314,12 +353,16 @@ function extractAnswer(text) {
   
   // Pattern 1: Tìm "correct answer is X" hoặc "answer is X" (ưu tiên cao nhất)
   const answerIsPatterns = [
-    /correct\s+answer\s+is\s+([A-Za-z])\s*\)/i,  // "correct answer is c)"
-    /correct\s+answer\s+is\s+([A-Za-z])\b/i,      // "correct answer is c"
-    /answer\s+is\s+([A-Za-z])\s*\)/i,             // "answer is c)"
-    /answer\s+is\s+([A-Za-z])\b/i,                 // "answer is c"
-    /answer:\s*([A-Za-z])\s*\)/i,                  // "answer: c)"
-    /answer:\s*([A-Za-z])\b/i                      // "answer: c"
+    /correct\s+answer\s+is\s*:\s*([A-Za-z])\s*\)/i,  // "correct answer is: c)"
+    /correct\s+answer\s+is\s*:\s*([A-Za-z])\b/i,      // "correct answer is: c"
+    /correct\s+answer\s+is\s+([A-Za-z])\s*\)/i,       // "correct answer is c)"
+    /correct\s+answer\s+is\s+([A-Za-z])\b/i,          // "correct answer is c"
+    /answer\s+is\s*:\s*([A-Za-z])\s*\)/i,             // "answer is: c)"
+    /answer\s+is\s*:\s*([A-Za-z])\b/i,                // "answer is: c"
+    /answer\s+is\s+([A-Za-z])\s*\)/i,                 // "answer is c)"
+    /answer\s+is\s+([A-Za-z])\b/i,                    // "answer is c"
+    /answer:\s*([A-Za-z])\s*\)/i,                     // "answer: c)"
+    /answer:\s*([A-Za-z])\b/i                         // "answer: c"
   ];
   
   for (const pattern of answerIsPatterns) {

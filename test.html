@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>MCQ Parser Tester</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    body { font-family: system-ui, Arial, sans-serif; margin: 16px; }
+    textarea { width: 100%; height: 160px; font-family: ui-monospace, Consolas, monospace; }
+    .row { display: flex; gap: 16px; flex-wrap: wrap; }
+    .col { flex: 1 1 420px; min-width: 320px; }
+    pre { background: #111; color: #0f0; padding: 12px; overflow: auto; border-radius: 6px; }
+    code { white-space: pre-wrap; }
+    button { margin: 4px 8px 4px 0; padding: 8px 12px; }
+    .samples button { font-size: 12px; }
+    .card { border: 1px solid #ddd; border-radius: 6px; padding: 12px; }
+    h3 { margin: 8px 0; }
+  </style>
+</head>
+<body>
+  <h1>MCQ Parser Tester</h1>
+
+  <div class="card">
+    <h3>Input</h3>
+    <div class="samples">
+      <strong>Quick samples:</strong><br/>
+      <button onclick="setSample(1)">Multi-line a) b) c)</button>
+      <button onclick="setSample(2)">Inline a) b) c) else)</button>
+      <button onclick="setSample(3)">Space-delimited: a 1 b 2 c 3 d 4 e 5 else 6</button>
+      <button onclick="setSample(4)">Dots/colons: a. a: else.</button>
+      <button onclick="setSample(5)">Mixed & question first</button>
+      <button onclick="setSample(6)">No options</button>
+    </div>
+    <textarea id="input"></textarea>
+    <div>
+      <button onclick="runCurrent()">Run CURRENT-like parser</button>
+      <button onclick="runEnhanced()">Run ENHANCED parser</button>
+      <button onclick="runBoth()">Run BOTH</button>
+      <button onclick="clearOutput()">Clear Output</button>
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="col card">
+      <h3>Current-like Output</h3>
+      <pre id="outCurrent"></pre>
+    </div>
+    <div class="col card">
+      <h3>Enhanced Output</h3>
+      <pre id="outEnhanced"></pre>
+    </div>
+  </div>
+
+  <script>
+    // CURRENT-LIKE: mirrors your punctuation-based patterns from background.js
+    function normalizeSelectionCurrent(text) {
+      let lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+
+      // Single-line split only if it contains X) separators
+      if (lines.length === 1) {
+        const parts = text.split(/\s+([a-zA-Z]+)\)\s+/);
+        if (parts.length > 1) {
+          lines = [];
+          for (let i = 0; i < parts.length; i++) {
+            if (i % 2 === 0 && parts[i].trim()) {
+              lines.push(parts[i].trim());
+            } else if (i % 2 === 1 && parts[i] && parts[i+1]) {
+              lines.push(`${parts[i]}) ${parts[i+1].trim()}`);
+              i++;
+            }
+          }
+        }
+      }
+
+      const optionMap = {};
+      let questionLines = [];
+
+      for (const line of lines) {
+        let m;
+        // else) other) none) all)
+        m = line.match(/^(else|other|none|all)\)\s*(.+)$/i);
+        if (m) { optionMap[m[1].toUpperCase()] = m[2].trim(); continue; }
+
+        // A) text
+        m = line.match(/^([a-zA-Z])\)\s*(.+)$/);
+        if (m) { optionMap[m[1].toUpperCase()] = m[2].trim(); continue; }
+
+        // A. text
+        m = line.match(/^([a-zA-Z])\.\s*(.+)$/);
+        if (m) { optionMap[m[1].toUpperCase()] = m[2].trim(); continue; }
+
+        // A: text
+        m = line.match(/^([a-zA-Z]):\s*(.+)$/);
+        if (m) { optionMap[m[1].toUpperCase()] = m[2].trim(); continue; }
+
+        // else. text
+        m = line.match(/^(else|other|none|all)\.\s*(.+)$/i);
+        if (m) { optionMap[m[1].toUpperCase()] = m[2].trim(); continue; }
+
+        // otherwise: question
+        questionLines.push(line);
+      }
+
+      return {
+        question: questionLines.join(' '),
+        options: optionMap
+      };
+    }
+
+    // ENHANCED: adds support for space-delimited inline formats and bare 'a text' / 'else text'
+    function normalizeSelectionEnhanced(text) {
+      let lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+
+      if (lines.length === 1) {
+        // Try split by "X) " punctuation first
+        const parts = text.split(/\s+([a-zA-Z]+)\)\s+/);
+        if (parts.length > 1) {
+          lines = [];
+          for (let i = 0; i < parts.length; i++) {
+            if (i % 2 === 0 && parts[i].trim()) {
+              lines.push(parts[i].trim());
+            } else if (i % 2 === 1 && parts[i] && parts[i+1]) {
+              lines.push(`${parts[i]}) ${parts[i+1].trim()}`);
+              i++;
+            }
+          }
+        } else {
+          // Fallback inline parser for: a 1  b 2 c 3 d 4 e 5 else 6
+          // Capture KEY (A-Z or special) then VALUE until next KEY or end
+          const inline = [...text.matchAll(/\b(else|other|none|all|[A-Za-z])\s*[\)\.:]?\s+([^]*?)(?=\s+(?:else|other|none|all|[A-Za-z])\s*[\)\.:]?\s+|$)/gi)];
+          if (inline.length > 1) {
+            const firstIdx = inline[0].index ?? 0;
+            const questionPart = text.slice(0, firstIdx).trim();
+            lines = [];
+            if (questionPart) lines.push(questionPart);
+            for (const m of inline) {
+              const key = (m[1] || '').toUpperCase();
+              const val = (m[2] || '').trim();
+              if (!key || !val) continue;
+              lines.push(`${key}) ${val}`);
+            }
+          }
+        }
+      }
+
+      const optionMap = {};
+      let questionLines = [];
+
+      for (const line of lines) {
+        let m;
+        // Special with ')'
+        m = line.match(/^(else|other|none|all)\)\s*(.+)$/i);
+        if (m) { optionMap[m[1].toUpperCase()] = m[2].trim(); continue; }
+
+        // A) text
+        m = line.match(/^([a-zA-Z])\)\s*(.+)$/);
+        if (m) { optionMap[m[1].toUpperCase()] = m[2].trim(); continue; }
+
+        // A. text
+        m = line.match(/^([a-zA-Z])\.\s*(.+)$/);
+        if (m) { optionMap[m[1].toUpperCase()] = m[2].trim(); continue; }
+
+        // A: text
+        m = line.match(/^([a-zA-Z]):\s*(.+)$/);
+        if (m) { optionMap[m[1].toUpperCase()] = m[2].trim(); continue; }
+
+        // Special with '.'
+        m = line.match(/^(else|other|none|all)\.\s*(.+)$/i);
+        if (m) { optionMap[m[1].toUpperCase()] = m[2].trim(); continue; }
+
+        // NEW: bare "A text"
+        m = line.match(/^([a-zA-Z])\s+(.+)$/);
+        if (m) { optionMap[m[1].toUpperCase()] = m[2].trim(); continue; }
+
+        // NEW: bare "else text"
+        m = line.match(/^(else|other|none|all)\s+(.+)$/i);
+        if (m) { optionMap[m[1].toUpperCase()] = m[2].trim(); continue; }
+
+        // Otherwise: question
+        questionLines.push(line);
+      }
+
+      return {
+        question: questionLines.join(' '),
+        options: optionMap
+      };
+    }
+
+    function setSample(id) {
+      const samples = {
+        1: `Which is true about OOP?\nA) Supports encapsulation\nB) No polymorphism\nC) Only functions\nD) Inheritance`,
+        2: `What is output? code() a) compile error b) runtime error c) 42 d) undefined else) none`,
+        3: `Question: map the following a 1  b 2 c 3 d 4 e 5 else 6`,
+        4: `Pick features\nA. Encapsulation\nB: Polymorphism\nelse. None of the above`,
+        5: `Choose valid options for class design in C++ a) RAII b) Multiple inheritance c) Templates d) Encapsulation else) Other`,
+        6: `This text has no options at all`
+      };
+      document.getElementById('input').value = samples[id] || '';
+      clearOutput();
+    }
+
+    function runCurrent() {
+      const text = document.getElementById('input').value;
+      const out = normalizeSelectionCurrent(text);
+      document.getElementById('outCurrent').textContent = JSON.stringify(out, null, 2);
+    }
+
+    function runEnhanced() {
+      const text = document.getElementById('input').value;
+      const out = normalizeSelectionEnhanced(text);
+      document.getElementById('outEnhanced').textContent = JSON.stringify(out, null, 2);
+    }
+
+    function runBoth() {
+      runCurrent();
+      runEnhanced();
+    }
+
+    function clearOutput() {
+      document.getElementById('outCurrent').textContent = '';
+      document.getElementById('outEnhanced').textContent = '';
+    }
+
+    // Default sample
+    setSample(3);
+  </script>
+</body>
+</html>
