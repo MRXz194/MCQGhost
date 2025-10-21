@@ -138,15 +138,16 @@ async function callOllamaSimple(ollamaUrl, modelName, prompt) {
   }
 }
 
-// Chuẩn hóa phần text user bôi đen → {question, options:{A,B,C,D}}
+// Chuẩn hóa phần text user bôi đen → {question, options:{A,B,C,...}}
 function normalizeSelection(text) {
   // Thử split theo nhiều patterns
   let lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
   
-  // Nếu không có line breaks, thử tách theo pattern a) b) c) d)
+  // Nếu không có line breaks, thử tách theo pattern a) b) c) d) e) f) else)...
   if (lines.length === 1) {
-    // Tách theo pattern: "... a) text1 b) text2 c) text3 d) text4"
-    const parts = text.split(/\s+([a-dA-D])\)\s+/);
+    // Tách theo pattern: "... a) text1 b) text2 c) text3 else) text..."
+    // Hỗ trợ cả chữ cái và keywords đặc biệt
+    const parts = text.split(/\s+([a-zA-Z]+)\)\s+/);
     if (parts.length > 1) {
       lines = [];
       for (let i = 0; i < parts.length; i++) {
@@ -160,12 +161,20 @@ function normalizeSelection(text) {
     }
   }
   
-  const optionMap = { A: '', B: '', C: '', D: '' };
+  const optionMap = {}; // Tự động phát hiện tất cả các options
   let questionLines = [];
   
   for (const line of lines) {
+    // Pattern đặc biệt: "else)" hoặc "other)" hoặc "none)" (các keywords đặc biệt)
+    let m = line.match(/^(else|other|none|all)\)\s*(.+)$/i);
+    if (m) {
+      const key = m[1].toUpperCase();
+      optionMap[key] = m[2].trim();
+      continue;
+    }
+    
     // Pattern 1: "a) text" hoặc "A) text"
-    let m = line.match(/^([a-dA-D])\)\s*(.+)$/);
+    m = line.match(/^([a-zA-Z])\)\s*(.+)$/);
     if (m) {
       const key = m[1].toUpperCase();
       optionMap[key] = m[2].trim();
@@ -173,7 +182,7 @@ function normalizeSelection(text) {
     }
     
     // Pattern 2: "a. text" hoặc "A. text"
-    m = line.match(/^([a-dA-D])\.\s*(.+)$/);
+    m = line.match(/^([a-zA-Z])\.\s*(.+)$/);
     if (m) {
       const key = m[1].toUpperCase();
       optionMap[key] = m[2].trim();
@@ -181,7 +190,15 @@ function normalizeSelection(text) {
     }
     
     // Pattern 3: "a: text" hoặc "A: text"
-    m = line.match(/^([a-dA-D]):\s*(.+)$/);
+    m = line.match(/^([a-zA-Z]):\s*(.+)$/);
+    if (m) {
+      const key = m[1].toUpperCase();
+      optionMap[key] = m[2].trim();
+      continue;
+    }
+    
+    // Pattern đặc biệt với dấu chấm: "else." hoặc "other."
+    m = line.match(/^(else|other|none|all)\.\s*(.+)$/i);
     if (m) {
       const key = m[1].toUpperCase();
       optionMap[key] = m[2].trim();
@@ -202,42 +219,34 @@ function normalizeSelection(text) {
   };
 }
 
-// Xây prompt với structured thinking - anti-hallucination
+// Xây prompt đơn giản và general cho mọi môn học
 function buildSimplePrompt(parsed) {
   const { question, options } = parsed;
-  const a = options.A || options.a || '';
-  const b = options.B || options.b || '';
-  const c = options.C || options.c || '';
-  const d = options.D || options.d || '';
-  return `You are an expert professor in Signal and Systems engineering with deep knowledge of:
-- Fourier Transform, Laplace Transform, Z-Transform
-- Linear Time-Invariant (LTI) Systems
-- Convolution, Causality, Stability
-- Frequency Domain Analysis
-- System Properties and Characteristics
+  
+  // Tạo danh sách options động
+  const optionKeys = Object.keys(options).sort();
+  const optionsText = optionKeys.map(key => `${key}) ${options[key]}`).join('\n');
+  const optionLetters = optionKeys.join(', ');
+  
+  return `You are an expert tutor helping solve multiple choice questions across all subjects including:
+- Math, Physics, Chemistry, Biology
+- Computer Science, Programming, Algorithms
+- Engineering (Electrical, Mechanical, Civil, etc.)
+- Business, Economics, Finance
+- And any other academic subjects
 
-CRITICAL INSTRUCTIONS:
-1. Read the question carefully and identify the core concept
-2. Analyze each option based ONLY on fundamental Signal & Systems theory
-3. Do NOT add assumptions or external information
-4. Think step-by-step internally but OUTPUT only ONE letter
-5. Choose the MOST technically accurate answer
+INSTRUCTIONS:
+1. Read the question carefully
+2. Analyze each option logically
+3. Choose the MOST correct answer
+4. OUTPUT ONLY ONE LETTER (${optionLetters})
 
 Question: ${question}
 
 Options:
-A) ${a}
-B) ${b}
-C) ${c}
-D) ${d}
+${optionsText}
 
-REASONING PROCESS (internal - do not write this):
-- What concept is being tested?
-- Which option matches the fundamental definition/property?
-- Eliminate clearly wrong answers
-- Select the most precise answer
-
-YOUR ANSWER (write ONLY this - one letter A, B, C, or D):`;
+YOUR ANSWER (write ONLY the letter):`;
 }
 
 
@@ -254,7 +263,7 @@ async function safeShowAlert(tabId, message) {
   }
 }
 
-// Trích xuất đáp án từ response
+// Trích xuất đáp án từ response - hỗ trợ A-Z
 function extractAnswer(text) {
   console.log('Raw AI response:', text);
   
@@ -267,35 +276,50 @@ function extractAnswer(text) {
   const cleaned = text.trim();
   const cleanedUpper = cleaned.toUpperCase();
   
-  // Pattern 0: Nếu response chỉ có 1 ký tự và là A/B/C/D (IDEAL!)
-  if (cleanedUpper.length === 1 && /^[ABCD]$/.test(cleanedUpper)) {
+  // Pattern -1: Kiểm tra keywords đặc biệt (else, other, none, all)
+  const specialKeywords = ['ELSE', 'OTHER', 'NONE', 'ALL'];
+  for (const keyword of specialKeywords) {
+    if (cleanedUpper === keyword) {
+      console.log('Perfect! Special keyword answer:', cleanedUpper);
+      return cleanedUpper;
+    }
+    // Kiểm tra nếu bắt đầu bằng keyword
+    const startsWithKeyword = new RegExp(`^(${keyword})[\s\(\)\.\,\n]`, 'i');
+    const keywordMatch = cleaned.match(startsWithKeyword);
+    if (keywordMatch) {
+      console.log('Starts with special keyword:', keywordMatch[1]);
+      return keywordMatch[1].toUpperCase();
+    }
+  }
+  
+  // Pattern 0: Nếu response chỉ có 1 ký tự và là A-Z (IDEAL!)
+  if (cleanedUpper.length === 1 && /^[A-Z]$/.test(cleanedUpper)) {
     console.log('Perfect! Single character answer:', cleanedUpper);
     return cleanedUpper;
   }
   
-  // Pattern 0.5: Bắt đầu bằng A/B/C/D rồi có ký tự khác (như "A (", "B)", etc)
-  const startsWithLetter = cleaned.match(/^([ABCDabcd])[\s\(\)\.\,\n]/);
+  // Pattern 0.5: Bắt đầu bằng A-Z rồi có ký tự khác (như "A (", "B)", etc)
+  const startsWithLetter = cleaned.match(/^([A-Za-z])[\s\(\)\.\,\n]/);
   if (startsWithLetter) {
     console.log('Starts with letter:', startsWithLetter[1]);
     return startsWithLetter[1].toUpperCase();
   }
   
   // Pattern 0.6: "The answer is X" ngay từ đầu
-  const theAnswerIs = cleaned.match(/^(?:the\s+)?answer\s+is\s+([ABCDabcd])\b/i);
+  const theAnswerIs = cleaned.match(/^(?:the\s+)?answer\s+is\s+([A-Za-z])\b/i);
   if (theAnswerIs) {
     console.log('"The answer is" pattern:', theAnswerIs[1]);
     return theAnswerIs[1].toUpperCase();
   }
   
   // Pattern 1: Tìm "correct answer is X" hoặc "answer is X" (ưu tiên cao nhất)
-  // Tìm pattern "answer is [letter]" với nhiều variations
   const answerIsPatterns = [
-    /correct\s+answer\s+is\s+([abcdABCD])\s*\)/i,  // "correct answer is c)"
-    /correct\s+answer\s+is\s+([abcdABCD])\b/i,      // "correct answer is c"
-    /answer\s+is\s+([abcdABCD])\s*\)/i,             // "answer is c)"
-    /answer\s+is\s+([abcdABCD])\b/i,                 // "answer is c"
-    /answer:\s*([abcdABCD])\s*\)/i,                  // "answer: c)"
-    /answer:\s*([abcdABCD])\b/i                      // "answer: c"
+    /correct\s+answer\s+is\s+([A-Za-z])\s*\)/i,  // "correct answer is c)"
+    /correct\s+answer\s+is\s+([A-Za-z])\b/i,      // "correct answer is c"
+    /answer\s+is\s+([A-Za-z])\s*\)/i,             // "answer is c)"
+    /answer\s+is\s+([A-Za-z])\b/i,                 // "answer is c"
+    /answer:\s*([A-Za-z])\s*\)/i,                  // "answer: c)"
+    /answer:\s*([A-Za-z])\b/i                      // "answer: c"
   ];
   
   for (const pattern of answerIsPatterns) {
@@ -307,7 +331,7 @@ function extractAnswer(text) {
   }
   
   // Pattern 2: Tìm "Answer: X" hoặc "Đáp án: X"
-  const colonAnswerMatch = cleaned.match(/(?:answer|đáp án)\s*:\s*([abcdABCD])/i);
+  const colonAnswerMatch = cleaned.match(/(?:answer|đáp án)\s*:\s*([A-Za-z])/i);
   if (colonAnswerMatch) {
     console.log('Found colon answer:', colonAnswerMatch[1]);
     return colonAnswerMatch[1].toUpperCase();
@@ -316,21 +340,21 @@ function extractAnswer(text) {
   // Pattern 3: Tìm "X)" ở CẬN CUỐI câu (để tránh nhầm với câu hỏi)
   // Chỉ tìm trong 100 ký tự cuối
   const lastPart = cleaned.slice(-100);
-  const optionMatch = lastPart.match(/\b([abcdABCD])\s*\)/);
+  const optionMatch = lastPart.match(/\b([A-Za-z])\s*\)/);
   if (optionMatch) {
     console.log('Found option in last part:', optionMatch[1]);
     return optionMatch[1].toUpperCase();
   }
   
   // Pattern 4: Letter đứng một mình ở cuối
-  const lastWordMatch = cleaned.match(/\b([ABCD])\b\s*$/i);
+  const lastWordMatch = cleaned.match(/\b([A-Z])\b\s*$/i);
   if (lastWordMatch) {
     console.log('Found last word letter:', lastWordMatch[1]);
     return lastWordMatch[1].toUpperCase();
   }
   
   // Pattern 5: Tìm trong ngoặc (A) hoặc [B] gần cuối
-  const bracketMatch = lastPart.match(/[\(\[]([abcdABCD])[\)\]]/i);
+  const bracketMatch = lastPart.match(/[\(\[]([A-Za-z])[\)\]]/i);
   if (bracketMatch) {
     console.log('Found in brackets:', bracketMatch[1]);
     return bracketMatch[1].toUpperCase();
@@ -338,15 +362,15 @@ function extractAnswer(text) {
   
   // Pattern 6: CHỈ tìm chữ cái STANDALONE (có space hoặc dấu câu xung quanh)
   // Tránh tìm "a" trong "a unit" hoặc "an answer"
-  const standaloneLetters = [...cleaned.matchAll(/(?:^|\s)([ABCDabcd])(?:\s|$|\.|,|;)/g)];
+  const standaloneLetters = [...cleaned.matchAll(/(?:^|\s)([A-Za-z])(?:\s|$|\.|,|;)/g)];
   if (standaloneLetters.length > 0) {
     const lastLetter = standaloneLetters[standaloneLetters.length - 1][1];
     console.warn('Using fallback - found standalone letter:', lastLetter);
     return lastLetter.toUpperCase();
   }
   
-  // Pattern 7: Tìm UPPERCASE A/B/C/D trong text (ưu tiên uppercase)
-  const uppercaseMatch = cleaned.match(/\b([ABCD])\b/);
+  // Pattern 7: Tìm UPPERCASE A-Z trong text (ưu tiên uppercase)
+  const uppercaseMatch = cleaned.match(/\b([A-Z])\b/);
   if (uppercaseMatch) {
     console.warn('Found uppercase letter:', uppercaseMatch[1]);
     return uppercaseMatch[1];
