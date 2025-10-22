@@ -272,25 +272,21 @@ function buildSimplePrompt(parsed) {
   const optionsText = optionKeys.map(key => `${key}) ${options[key]}`).join('\n');
   const optionLetters = optionKeys.join(', ');
   
-  return `You are an expert tutor helping solve multiple choice questions across all subjects including:
-- Math, Physics, Chemistry, Biology
-- Computer Science, Programming, Algorithms
-- Engineering (Electrical, Mechanical, Civil, etc.)
-- Business, Economics, Finance
-- And any other academic subjects
+  return `You are an expert tutor who solves multiple choice questions accurately across all academic subjects 
+(e.g., Computer Science, Programming, Math, Physics, etc.).
 
-INSTRUCTIONS:
-1. Read the question carefully
-2. Analyze each option logically
-3. Choose the MOST correct answer
-4. OUTPUT ONLY ONE LETTER (${optionLetters})
+Your task:
+- Read the question carefully.
+- Think step by step logically to find the most correct answer.
+- Finally, output ONLY one letter (${optionLetters}).
 
 Question: ${question}
 
 Options:
 ${optionsText}
 
-YOUR ANSWER (write ONLY the letter):`;
+Now reason carefully before choosing.
+YOUR FINAL ANSWER (write ONLY the letter, no explanation):`;
 }
 
 
