@@ -148,7 +148,13 @@
         <option value="phi3.5:3.8b">Phi 3.5 Mini - Compact (2.2GB)</option>
         <option value="llama3.2:3b">Llama 3.2 3B - Lightweight (2GB)</option>
       </optgroup>
+      <option value="__custom__">Custom...</option>
     </select>
+  </div>
+  
+  <div class="form-group" id="customModelGroup" style="display: none;">
+    <label for="customModelInput">Custom Model Name:</label>
+    <input type="text" id="customModelInput" placeholder="e.g. mistral:7b-instruct-q4_0 or your-local-model">
   </div>
   
   <button id="saveBtn">Lưu cấu hình</button>
