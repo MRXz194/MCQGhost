@@ -2,142 +2,96 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>MCQ Parser Tester</title>
+  <title>MCQ Parser Tester - MCQGhost</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <style>
-    body { font-family: system-ui, Arial, sans-serif; margin: 16px; }
-    textarea { width: 100%; height: 160px; font-family: ui-monospace, Consolas, monospace; }
-    .row { display: flex; gap: 16px; flex-wrap: wrap; }
+    body { font-family: system-ui, Arial, sans-serif; margin: 16px; background: #f7f9fc; color: #333; }
+    textarea { width: 100%; height: 160px; font-family: ui-monospace, Consolas, monospace; padding: 10px; border: 1px solid #ccc; border-radius: 6px; }
+    .row { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 16px; }
     .col { flex: 1 1 420px; min-width: 320px; }
-    pre { background: #111; color: #0f0; padding: 12px; overflow: auto; border-radius: 6px; }
-    code { white-space: pre-wrap; }
-    button { margin: 4px 8px 4px 0; padding: 8px 12px; }
-    .samples button { font-size: 12px; }
-    .card { border: 1px solid #ddd; border-radius: 6px; padding: 12px; }
-    h3 { margin: 8px 0; }
+    pre { background: #111; color: #0f0; padding: 12px; overflow: auto; border-radius: 6px; font-size: 13px; max-height: 400px; }
+    button { margin: 4px 8px 4px 0; padding: 8px 12px; cursor: pointer; border-radius: 4px; border: 1px solid #bbb; background: #fff; font-weight: 500; }
+    button:hover { background: #eee; }
+    .samples button { font-size: 12px; background: #eef2ff; border-color: #c7d2fe; color: #3730a3; }
+    .samples button:hover { background: #e0e7ff; }
+    .card { border: 1px solid #ddd; border-radius: 6px; padding: 14px; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+    h1 { margin-top: 0; color: #1e1b4b; }
+    h3 { margin: 8px 0; color: #4338ca; }
   </style>
 </head>
 <body>
-  <h1>MCQ Parser Tester</h1>
+  <h1>MCQ Parser Tester - MCQGhost v2.4+</h1>
 
   <div class="card">
-    <h3>Input</h3>
+    <h3>Input Samples</h3>
     <div class="samples">
       <strong>Quick samples:</strong><br/>
-      <button onclick="setSample(1)">Multi-line a) b) c)</button>
-      <button onclick="setSample(2)">Inline a) b) c) else)</button>
-      <button onclick="setSample(3)">Space-delimited: a 1 b 2 c 3 d 4 e 5 else 6</button>
-      <button onclick="setSample(4)">Dots/colons: a. a: else.</button>
-      <button onclick="setSample(5)">Mixed & question first</button>
-      <button onclick="setSample(6)">No options</button>
+      <button onclick="setSample(1)">8 Options (A - H)</button>
+      <button onclick="setSample(2)">Multi-choice (Chọn các đáp án đúng)</button>
+      <button onclick="setSample(3)">Code Drag & Drop / Blank [1], [2]</button>
+      <button onclick="setSample(4)">Unlabeled Checkboxes [ ]</button>
+      <button onclick="setSample(5)">Plain Lines (No ABCD)</button>
+      <button onclick="setSample(6)">Numbered 1) 2) 3) 4)</button>
+      <button onclick="setSample(7)">Roman I) II) III) IV)</button>
+      <button onclick="setSample(8)">Inline a) b) c) else)</button>
     </div>
-    <textarea id="input"></textarea>
-    <div>
-      <button onclick="runCurrent()">Run CURRENT-like parser</button>
-      <button onclick="runEnhanced()">Run ENHANCED parser</button>
-      <button onclick="runBoth()">Run BOTH</button>
+    <textarea id="input" style="margin-top: 10px;"></textarea>
+    <div style="margin-top: 10px;">
+      <button onclick="runV2Parser()" style="background: #4338ca; color: white; border-color: #3730a3;">Run V2 Smart Parser</button>
       <button onclick="clearOutput()">Clear Output</button>
     </div>
   </div>
 
   <div class="row">
     <div class="col card">
-      <h3>Current-like Output</h3>
-      <pre id="outCurrent"></pre>
-    </div>
-    <div class="col card">
-      <h3>Enhanced Output</h3>
-      <pre id="outEnhanced"></pre>
+      <h3>Parsed Result (V2 Smart Parser)</h3>
+      <pre id="outV2"></pre>
     </div>
   </div>
 
   <script>
-    // CURRENT-LIKE: mirrors your punctuation-based patterns from background.js
-    function normalizeSelectionCurrent(text) {
+    function normalizeSelection(text) {
+      const rawText = text.trim();
       let lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
 
-      // Single-line split only if it contains X) separators
-      if (lines.length === 1) {
-        const parts = text.split(/\s+([a-zA-Z]+)\)\s+/);
-        if (parts.length > 1) {
+      const hasBlankTokens = /_{2,}|\[\s*(?:\d+|blank|_|\?)\s*\]|\(\s*(?:\d+|blank|_|\?)\s*\)|<blank>|<fill>/i.test(rawText);
+      const hasBlankKeywords = /(kéo\s*thả|điền\s*vào\s*chỗ\s*trống|drag\s*(?:and|&)\s*drop|fill\s*in\s*the\s*blank|complete\s*the\s*code)/i.test(rawText);
+
+      if (lines.length === 1 && !hasBlankTokens) {
+        const delimiterSplit = text.split(/\s+([a-zA-Z]|[0-9]{1,2}|[IVXLCDMivxlcdm]{1,5})\s*[\)\.\:\-]\s+/);
+        if (delimiterSplit.length > 1) {
           lines = [];
-          for (let i = 0; i < parts.length; i++) {
-            if (i % 2 === 0 && parts[i].trim()) {
-              lines.push(parts[i].trim());
-            } else if (i % 2 === 1 && parts[i] && parts[i+1]) {
-              lines.push(`${parts[i]}) ${parts[i+1].trim()}`);
-              i++;
-            }
-          }
-        }
-      }
-
-      const optionMap = {};
-      let questionLines = [];
-
-      for (const line of lines) {
-        let m;
-        // else) other) none) all)
-        m = line.match(/^(else|other|none|all)\)\s*(.+)$/i);
-        if (m) { optionMap[m[1].toUpperCase()] = m[2].trim(); continue; }
-
-        // A) text
-        m = line.match(/^([a-zA-Z])\)\s*(.+)$/);
-        if (m) { optionMap[m[1].toUpperCase()] = m[2].trim(); continue; }
-
-        // A. text
-        m = line.match(/^([a-zA-Z])\.\s*(.+)$/);
-        if (m) { optionMap[m[1].toUpperCase()] = m[2].trim(); continue; }
-
-        // A: text
-        m = line.match(/^([a-zA-Z]):\s*(.+)$/);
-        if (m) { optionMap[m[1].toUpperCase()] = m[2].trim(); continue; }
-
-        // else. text
-        m = line.match(/^(else|other|none|all)\.\s*(.+)$/i);
-        if (m) { optionMap[m[1].toUpperCase()] = m[2].trim(); continue; }
-
-        // otherwise: question
-        questionLines.push(line);
-      }
-
-      return {
-        question: questionLines.join(' '),
-        options: optionMap
-      };
-    }
-
-    // ENHANCED: adds support for space-delimited inline formats and bare 'a text' / 'else text'
-    function normalizeSelectionEnhanced(text) {
-      let lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
-
-      if (lines.length === 1) {
-        // Try split by "X) " punctuation first
-        const parts = text.split(/\s+([a-zA-Z]+)\)\s+/);
-        if (parts.length > 1) {
-          lines = [];
-          for (let i = 0; i < parts.length; i++) {
-            if (i % 2 === 0 && parts[i].trim()) {
-              lines.push(parts[i].trim());
-            } else if (i % 2 === 1 && parts[i] && parts[i+1]) {
-              lines.push(`${parts[i]}) ${parts[i+1].trim()}`);
+          for (let i = 0; i < delimiterSplit.length; i++) {
+            if (i === 0 && delimiterSplit[i].trim()) {
+              lines.push(delimiterSplit[i].trim());
+            } else if (i % 2 === 1 && delimiterSplit[i] && delimiterSplit[i + 1] !== undefined) {
+              lines.push(`${delimiterSplit[i]}) ${delimiterSplit[i + 1].trim()}`);
               i++;
             }
           }
         } else {
-          // Fallback inline parser for: a 1  b 2 c 3 d 4 e 5 else 6
-          // Capture KEY (A-Z or special) then VALUE until next KEY or end
-          const inline = [...text.matchAll(/\b(else|other|none|all|[A-Za-z])\s*[\)\.:]?\s+([^]*?)(?=\s+(?:else|other|none|all|[A-Za-z])\s*[\)\.:]?\s+|$)/gi)];
-          if (inline.length > 1) {
-            const firstIdx = inline[0].index ?? 0;
-            const questionPart = text.slice(0, firstIdx).trim();
+          const checkboxSplit = text.split(/\s*(?:\[\s*\]|\[x\]|\[X\]|☐|☑|○|●|•)\s*/);
+          if (checkboxSplit.length > 2) {
             lines = [];
-            if (questionPart) lines.push(questionPart);
-            for (const m of inline) {
-              const key = (m[1] || '').toUpperCase();
-              const val = (m[2] || '').trim();
-              if (!key || !val) continue;
-              lines.push(`${key}) ${val}`);
+            if (checkboxSplit[0].trim()) lines.push(checkboxSplit[0].trim());
+            for (let i = 1; i < checkboxSplit.length; i++) {
+              if (checkboxSplit[i].trim()) {
+                lines.push(`[ ] ${checkboxSplit[i].trim()}`);
+              }
+            }
+          } else {
+            const inlineMatches = [...text.matchAll(/\b(else|other|none|all|[A-Za-z]|[0-9]{1,2})\s*[\)\.:]?\s+([^]*?)(?=\s+(?:else|other|none|all|[A-Za-z]|[0-9]{1,2})\s*[\)\.:]?\s+|$)/gi)];
+            if (inlineMatches.length > 1) {
+              const firstIdx = inlineMatches[0].index ?? 0;
+              const questionPart = text.slice(0, firstIdx).trim();
+              lines = [];
+              if (questionPart) lines.push(questionPart);
+              for (const m of inlineMatches) {
+                const key = (m[1] || '').toUpperCase();
+                const val = (m[2] || '').trim();
+                if (!key || !val) continue;
+                lines.push(`${key}) ${val}`);
+              }
             }
           }
         }
@@ -145,84 +99,150 @@
 
       const optionMap = {};
       let questionLines = [];
+      let autoIndex = 1;
+      let hasCheckboxes = false;
+      let wordBankItems = [];
 
       for (const line of lines) {
         let m;
-        // Special with ')'
-        m = line.match(/^(else|other|none|all)\)\s*(.+)$/i);
-        if (m) { optionMap[m[1].toUpperCase()] = m[2].trim(); continue; }
 
-        // A) text
-        m = line.match(/^([a-zA-Z])\)\s*(.+)$/);
-        if (m) { optionMap[m[1].toUpperCase()] = m[2].trim(); continue; }
+        const wbMatch = line.match(/^(?:từ\s*(?:cho\s*trước|gợi\s*ý)|choices|options|word\s*bank|words)\s*[\:\-]\s*(.+)$/i);
+        if (wbMatch) {
+          const items = wbMatch[1].split(/[,;|]+/).map(s => s.trim()).filter(Boolean);
+          wordBankItems.push(...items);
+          continue;
+        }
 
-        // A. text
-        m = line.match(/^([a-zA-Z])\.\s*(.+)$/);
-        if (m) { optionMap[m[1].toUpperCase()] = m[2].trim(); continue; }
+        m = line.match(/^(\[\s*\]|\[x\]|\[X\]|☐|☑|○|●|◯|⚪|🔘|•|·|\-)\s*(.+)$/i);
+        if (m) {
+          const key = `[${autoIndex++}]`;
+          optionMap[key] = m[2].trim();
+          hasCheckboxes = true;
+          continue;
+        }
 
-        // A: text
-        m = line.match(/^([a-zA-Z]):\s*(.+)$/);
-        if (m) { optionMap[m[1].toUpperCase()] = m[2].trim(); continue; }
+        m = line.match(/^[\(\[]([a-zA-Z]|[0-9]{1,2}|[IVXLCDMivxlcdm]{1,5})[\)\]][\:\.\-]?\s+(.+)$/);
+        if (m && !hasBlankTokens) {
+          const key = m[1].toUpperCase();
+          optionMap[key] = m[2].trim();
+          continue;
+        }
 
-        // Special with '.'
-        m = line.match(/^(else|other|none|all)\.\s*(.+)$/i);
-        if (m) { optionMap[m[1].toUpperCase()] = m[2].trim(); continue; }
+        m = line.match(/^(else|other|none|all|none of the above|all of the above)[\)\.\:\-]\s*(.+)$/i);
+        if (m) {
+          const key = m[1].toUpperCase();
+          optionMap[key] = m[2].trim();
+          continue;
+        }
 
-        // NEW: bare "A text"
-        m = line.match(/^([a-zA-Z])\s+(.+)$/);
-        if (m) { optionMap[m[1].toUpperCase()] = m[2].trim(); continue; }
+        m = line.match(/^([a-zA-Z]|[0-9]{1,2}|[IVXLCDMivxlcdm]{1,5})[\)\.\:\-]\s+(.+)$/);
+        if (m) {
+          const key = m[1].toUpperCase();
+          optionMap[key] = m[2].trim();
+          continue;
+        }
 
-        // NEW: bare "else text"
+        m = line.match(/^([a-zA-Z])\s{2,}(.+)$/);
+        if (m && !hasBlankTokens) {
+          const key = m[1].toUpperCase();
+          optionMap[key] = m[2].trim();
+          continue;
+        }
+
         m = line.match(/^(else|other|none|all)\s+(.+)$/i);
-        if (m) { optionMap[m[1].toUpperCase()] = m[2].trim(); continue; }
+        if (m) {
+          const key = m[1].toUpperCase();
+          optionMap[key] = m[2].trim();
+          continue;
+        }
 
-        // Otherwise: question
         questionLines.push(line);
       }
 
+      if (wordBankItems.length > 0 && Object.keys(optionMap).length === 0) {
+        wordBankItems.forEach((wb, i) => {
+          optionMap[`(${i + 1})`] = wb;
+        });
+      }
+
+      const hasStandardMcqOptions = Object.keys(optionMap).some(k => /^[A-D]$/.test(k));
+      const isFillBlank = (hasBlankTokens || hasBlankKeywords) && (!hasStandardMcqOptions || hasBlankKeywords);
+
+      let isUnlabeled = false;
+      if (!isFillBlank && Object.keys(optionMap).length === 0 && questionLines.length >= 3) {
+        let qEndIdx = 0;
+        for (let i = 0; i < Math.min(3, questionLines.length - 2); i++) {
+          if (/[?\:]$/.test(questionLines[i]) || /(chọn|hãy|đâu là|nào|which|what|how|where|select|choose)/i.test(questionLines[i])) {
+            qEndIdx = i;
+            break;
+          }
+        }
+        const potentialQ = questionLines.slice(0, qEndIdx + 1).join(' ');
+        const potentialOptions = questionLines.slice(qEndIdx + 1);
+
+        if (potentialOptions.length >= 2 && potentialOptions.length <= 10 && potentialOptions.every(l => l.length < 250)) {
+          questionLines = [potentialQ];
+          potentialOptions.forEach((optText, idx) => {
+            optionMap[`[${idx + 1}]`] = optText.trim();
+          });
+          isUnlabeled = true;
+        }
+      }
+
+      const question = questionLines.join('\n');
+      const fullText = (question + ' ' + rawText).toLowerCase();
+
+      const isMultiKeywords = /\b(select\s+(?:all|any|\d+|two|three|four)|choose\s+(?:all|\d+|two|three)|which\s+of\s+the\s+following\s+(?:are|can\s+be)|multiple\s+(?:answers|choices)|check\s+all|more\s+than\s+one)\b/i.test(fullText) ||
+        /(chọn\s+(?:tất\s+cả|các|những|\d+|hai|ba)|những\s+(?:đáp\s+án|phát\s+biểu|khẳng\s+định|câu)|các\s+(?:đáp\s+án|phát\s+biểu|khẳng\s+định|câu)\s+(?:đúng|nào)|có\s+thể\s+chọn\s+nhiều|chọn\s+(?:đúng|sai)\s+cho\s+từng)/i.test(fullText);
+
+      const isMulti = hasCheckboxes || isMultiKeywords;
+
+      let type = 'SINGLE_MCQ';
+      if (isFillBlank) {
+        type = 'FILL_BLANK';
+      } else if (isMulti) {
+        type = 'MULTI_MCQ';
+      } else if (isUnlabeled) {
+        type = 'UNLABELED';
+      }
+
       return {
-        question: questionLines.join(' '),
-        options: optionMap
+        type,
+        question,
+        options: optionMap,
+        rawText,
+        isUnlabeled,
+        hasCheckboxes
       };
     }
 
     function setSample(id) {
       const samples = {
-        1: `Which is true about OOP?\nA) Supports encapsulation\nB) No polymorphism\nC) Only functions\nD) Inheritance`,
-        2: `What is output? code() a) compile error b) runtime error c) 42 d) undefined else) none`,
-        3: `Question: map the following a 1  b 2 c 3 d 4 e 5 else 6`,
-        4: `Pick features\nA. Encapsulation\nB: Polymorphism\nelse. None of the above`,
-        5: `Choose valid options for class design in C++ a) RAII b) Multiple inheritance c) Templates d) Encapsulation else) Other`,
-        6: `This text has no options at all`
+        1: `Which layer is responsible for routing in OSI model?\nA) Physical layer\nB) Data Link layer\nC) Network layer\nD) Transport layer\nE) Session layer\nF) Presentation layer\nG) Application layer\nH) None of the above`,
+        2: `Hãy chọn các đáp án đúng về giao thức tầng Transport:\nA) TCP là giao thức hướng kết nối và tin cậy\nB) UDP là giao thức tin cậy\nC) UDP không thiết lập kết nối (connectionless)\nD) IP là giao thức tầng Transport`,
+        3: `def find_max(numbers):\n    max_val = numbers[0]\n    for num in numbers:\n        if [1] > max_val:\n            max_val = [2]\n    return max_val\nTừ cho trước: num, max_val, numbers`,
+        4: `Which of the following are valid Python keywords?\n[ ] def\n[ ] function\n[ ] class\n[ ] lambda`,
+        5: `Đâu là phương thức lưu trữ dữ liệu dạng key-value NoSQL?\nRedis\nPostgreSQL\nOracle Database\nMySQL Server`,
+        6: `Chọn đáp án đúng nhất:\n1) Python là ngôn ngữ thông dịch\n2) C++ là ngôn ngữ thông dịch\n3) HTML là ngôn ngữ lập trình\n4) CSS dùng để xử lý logic backend`,
+        7: `Chọn đặc tính OOP:\nI) Đóng gói (Encapsulation)\nII) Kế thừa (Inheritance)\nIII) Đa hình (Polymorphism)\nIV) Trừu tượng (Abstraction)`,
+        8: `What is output? code() a) compile error b) runtime error c) 42 d) undefined else) none`
       };
       document.getElementById('input').value = samples[id] || '';
-      clearOutput();
+      runV2Parser();
     }
 
-    function runCurrent() {
+    function runV2Parser() {
       const text = document.getElementById('input').value;
-      const out = normalizeSelectionCurrent(text);
-      document.getElementById('outCurrent').textContent = JSON.stringify(out, null, 2);
-    }
-
-    function runEnhanced() {
-      const text = document.getElementById('input').value;
-      const out = normalizeSelectionEnhanced(text);
-      document.getElementById('outEnhanced').textContent = JSON.stringify(out, null, 2);
-    }
-
-    function runBoth() {
-      runCurrent();
-      runEnhanced();
+      const out = normalizeSelection(text);
+      document.getElementById('outV2').textContent = JSON.stringify(out, null, 2);
     }
 
     function clearOutput() {
-      document.getElementById('outCurrent').textContent = '';
-      document.getElementById('outEnhanced').textContent = '';
+      document.getElementById('outV2').textContent = '';
     }
 
     // Default sample
-    setSample(3);
+    setSample(1);
   </script>
 </body>
 </html>

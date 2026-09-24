@@ -11,7 +11,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   ollamaUrlInput.value = config.ollamaUrl || 'http://localhost:11434';
 
-  const storedModel = config.modelName || 'llama3.1:8b-instruct-q4_0';
+  const storedModel = config.modelName || 'qwen2.5:14b-instruct';
   const predefinedOption = modelSelect.querySelector(`option[value="${CSS.escape(storedModel)}"]`);
 
   // Nếu model không có trong danh sách -> chọn Custom và hiển thị input
